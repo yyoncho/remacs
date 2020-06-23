@@ -898,6 +898,39 @@ pub fn message(args: &mut [LispObject]) -> LispObject {
     }
 }
 
+use std::os::raw::c_void;
+
+#[no_mangle]
+pub extern "C" fn generate_numbers(_data: *mut c_void) {}
+// use crate::dired_unix::LispObjectExt;
+
+// use dired_unix::;
+use crate::remacs_sys::make_user_ptr;
+use serde_json::Value;
+// Convert the JSON string back to a Point.
+// let deserialized: Point = serde_json::from_str(&serialized).unwrap();
+
+#[lisp_fn(min = "1", name = "json-serde", c_name = "json_serde")]
+pub fn json_serde(input: LispObject) -> LispObject {
+    let text = input.to_string();
+    // let v: Value = serde_json::from_str(&text).unwrap();
+    // let heap_pointer: *mut MyTrait = Box::into_raw(Box::new(v));
+
+    let mut state: Value = serde_json::from_str(&text).unwrap();
+    // state.
+
+    let state_ptr: *mut c_void = &mut state as *mut _ as *mut c_void;
+
+    unsafe { make_user_ptr(Some(generate_numbers), state_ptr) }
+}
+
+// #[lisp_fn(min = "2")]
+// pub fn json_get(input: LispObject, name: LispObject) -> LispObject {
+
+//     let text = input.to_string();
+
+// }
+
 /// Display a message, in a dialog box if possible.
 /// If a dialog box is not available, use the echo area.
 /// The first argument is a format control string, and the rest are data
