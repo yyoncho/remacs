@@ -1817,4 +1817,24 @@ pub fn stdio_client() -> (Connection, IoThreads) {
     (Connection { sender, receiver }, io_threads)
 }
 
+#[lisp_fn(min = "1")]
+pub fn fastjsonrcp_connection(_input: LispObject) -> LispObject {
+    let mut connection = stdio_client();
+    let state_ptr: *mut c_void = &mut connection as *mut _ as *mut c_void;
+
+    unsafe { make_user_ptr(Some(finalize), state_ptr) }
+}
+
+#[lisp_fn(min = "1")]
+pub fn fastjsonrcp_get_message(input: LispObject) -> LispObject {
+    let s = input.get_untaggedptr() as *mut Lisp_User_Ptr;
+    let connection = unsafe { (*s).p as *mut _ as *mut Connection };
+    unsafe {
+        match (*connection).receiver.try_recv() {
+            Ok(mut a) => make_user_ptr(Some(finalize), &mut a as *mut _ as *mut c_void),
+            _ => unreachable!(),
+        }
+    }
+}
+
 include!(concat!(env!("OUT_DIR"), "/editfns_exports.rs"));
