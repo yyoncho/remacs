@@ -898,37 +898,78 @@ pub fn message(args: &mut [LispObject]) -> LispObject {
     }
 }
 
-use std::os::raw::c_void;
+use std::{os::raw::c_void, thread};
+
+use crate::remacs_sys::code_convert_string_norecord;
+use crate::remacs_sys::make_user_ptr;
+use crate::remacs_sys::Qutf_8;
+use serde_json::Value;
+use std::ffi::CStr;
+use std::{
+    io::{BufReader, BufWriter},
+    process::{self, Command},
+    time::Duration,
+};
 
 #[no_mangle]
-pub extern "C" fn generate_numbers(_data: *mut c_void) {}
-// use crate::dired_unix::LispObjectExt;
+pub extern "C" fn finalize(_data: *mut c_void) {}
 
-// use dired_unix::;
-use crate::remacs_sys::make_user_ptr;
-use serde_json::Value;
-// Convert the JSON string back to a Point.
-// let deserialized: Point = serde_json::from_str(&serialized).unwrap();
-
-#[lisp_fn(min = "1", name = "json-serde", c_name = "json_serde")]
+#[lisp_fn(min = "1")]
 pub fn json_serde(input: LispObject) -> LispObject {
-    let text = input.to_string();
-    // let v: Value = serde_json::from_str(&text).unwrap();
-    // let heap_pointer: *mut MyTrait = Box::into_raw(Box::new(v));
+    unsafe {
+        let mut utf8 = code_convert_string_norecord(input, Qutf_8, true).force_string();
+        let len = STRING_BYTES(utf8.as_mut()) as usize;
 
-    let mut state: Value = serde_json::from_str(&text).unwrap();
-    // state.
+        let mut v: Vec<c_uchar> = Vec::with_capacity(len as usize);
 
-    let state_ptr: *mut c_void = &mut state as *mut _ as *mut c_void;
+        let key = libc::memcpy(
+            v.as_mut_ptr() as *mut c_void,
+            utf8.data_ptr() as *mut c_void,
+            len as libc::size_t,
+        ) as *const c_char;
 
-    unsafe { make_user_ptr(Some(generate_numbers), state_ptr) }
+        let c_str: &CStr = CStr::from_ptr(key);
+
+        let str_slice: &str = c_str.to_str().unwrap();
+        let str_buf: String = str_slice.to_owned();
+
+        // let text = input.as_string().unwrap();
+
+        message1("XXX>>>".as_ptr() as *const libc::c_char);
+
+        message1(format!("{}", str_buf).as_ptr() as *const libc::c_char);
+
+        message1("XXX>>>".as_ptr() as *const libc::c_char);
+        let mut state: Value = serde_json::from_str(&str_buf).unwrap();
+
+        thread::spawn(|| {
+            for i in 1..10 {
+                println!("hi number {} from the spawned thread!", i);
+                thread::sleep(Duration::from_millis(1));
+            }
+        });
+
+        let state_ptr: *mut c_void = &mut state as *mut _ as *mut c_void;
+
+        make_user_ptr(Some(finalize), state_ptr)
+    }
+}
+use crate::remacs_sys::Lisp_User_Ptr;
+
+#[lisp_fn(min = "1")]
+pub fn json_lazy(input: LispObject) -> LispObject {
+    let s = input.get_untaggedptr() as *mut Lisp_User_Ptr;
+    unsafe {
+        let orig = (*s).p;
+
+        let mut state = orig as *mut _ as *mut Value;
+    }
+    return input;
 }
 
 // #[lisp_fn(min = "2")]
 // pub fn json_get(input: LispObject, name: LispObject) -> LispObject {
-
 //     let text = input.to_string();
-
 // }
 
 /// Display a message, in a dialog box if possible.
@@ -1726,6 +1767,54 @@ pub fn insert_before_markers_and_inherit(string: &[u8]) {
 /// Wrapper for Fsystem_name (NOT PORTED)
 pub fn system_name() -> LispStringRef {
     unsafe { Fsystem_name() }.into()
+}
+
+use crossbeam_channel::{bounded, Receiver, Sender};
+use lsp_server::{Connection, IoThreads, Message};
+
+/// Creates an LSP connection via stdio.
+pub fn process_connection() -> (Sender<Message>, Receiver<Message>, IoThreads) {
+    let output: process::Child = Command::new("pyls").spawn().unwrap();
+
+    let (writer_sender, writer_receiver) = bounded::<Message>(0);
+
+    let mut inn = output.stdin;
+    let writer = thread::spawn(move || {
+        let mut stdout_writer = BufWriter::new(inn.as_mut().unwrap());
+        writer_receiver
+            .into_iter()
+            .try_for_each(|it| it.write(&mut stdout_writer))?;
+        Ok(())
+    });
+
+    let (reader_sender, reader_receiver) = bounded::<Message>(0);
+    let mut out = output.stdout;
+    let reader = thread::spawn(move || {
+        let mut stdout_reader = BufReader::new(out.as_mut().unwrap());
+        while let Some(msg) = Message::read(&mut stdout_reader)? {
+            // let is_exit = match &msg {
+            //     Message::Notification(n) => n.is_exit(),
+            //     _ => false,
+            // };
+
+            reader_sender.send(msg).unwrap();
+
+            // if is_exit {
+            //     break;
+            // }
+        }
+        Ok(())
+    });
+    let threads = IoThreads { reader, writer };
+    (writer_sender, reader_receiver, threads)
+}
+
+/// Create connection over standard in/standard out.
+///
+/// Use this to create a real language server.
+pub fn stdio_client() -> (Connection, IoThreads) {
+    let (sender, receiver, io_threads) = process_connection();
+    (Connection { sender, receiver }, io_threads)
 }
 
 include!(concat!(env!("OUT_DIR"), "/editfns_exports.rs"));

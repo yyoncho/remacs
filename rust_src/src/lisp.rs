@@ -153,6 +153,7 @@ impl<T> ExternalPtr<T> {
 
 impl<T> Deref for ExternalPtr<T> {
     type Target = T;
+
     fn deref(&self) -> &Self::Target {
         unsafe { &*self.0 }
     }
